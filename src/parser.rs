@@ -410,13 +410,26 @@ impl<'a> Parser<'a> {
 					return ExpressionBox { content, line };
 				}
 
+				// array literals
+				if self.peekv() == "(" {
+					static PARSING_ARR: &str = "when parsing a handler";
+
+					self.expect_value("(", PARSING_ARR);
+					self.expect_value(")", PARSING_ARR);
+					self.expect_value("=>", PARSING_ARR);
+
+					let body = self.parse_body();
+					let content = Expression::Handler(body);
+					return ExpressionBox { content, line };
+				}
+
 				else {
 					let line = self.peek().line;
 					error!(self, line,
 						"unexpected '{}' while parsing an expression", self.peekv())
 				}
 			}
-			
+
 			// _ => {
 			// 	let line = self.peek().line;
 			// 	error!(self, line,
@@ -433,9 +446,13 @@ impl<'a> Parser<'a> {
 
 		let mut posargs = vec![];
 		let mut krawg_first: Option<ExpressionBox> = None;
+		let mut handler = None;
+
 		loop {
 			if self.peekv() == ")" {
 				self.expect_value(")", PARSING_LIST);
+				break;
+			} else if self.peekv() == "(" {
 				break;
 			}
 
@@ -475,6 +492,8 @@ impl<'a> Parser<'a> {
 		while kwargs_used {
 			if self.peekv() == "," {
 				self.consume();
+			} else if self.peekv() == "(" {
+				break;
 			} else {
 				self.expect_value(")", PARSING_LIST);
 				break;
@@ -486,9 +505,15 @@ impl<'a> Parser<'a> {
 			kwargs.insert(name, value);
 		}
 		
+		if self.peekv() == "(" {
+			handler = Some(Box::new(self.parse_expr()));
+			self.expect_value(")", PARSING_LIST);
+		}
+		
 		return ArgumentList {
 			posargs: posargs,
-			kwargs: kwargs
+			kwargs: kwargs,
+			handler: handler
 		};
 	}
 

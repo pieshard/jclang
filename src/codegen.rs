@@ -123,7 +123,7 @@ impl<'a> Codegen<'a> {
 		eprintln!("\x1b[96m  --> \x1b[0m{}:{}", self.file, line);
 		self.printsrc(line);
 
-		eprintln!("compilation aborted due to an error");
+		eprintln!("\ncompilation aborted due to an error");
 		std::process::exit(1);
 	}
 	fn warn(&self, line: u32, args: std::fmt::Arguments) {
@@ -309,7 +309,7 @@ impl<'a> Codegen<'a> {
 		}
 	}
 
-	fn generate_exprstmt(&self,
+	fn generate_exprstmt(&mut self,
 		varscope: &mut HashMap<String, DefinedVariable>,
 		exprbox: &ExpressionBox,
 		mut nodes: &mut Vec<Value>
@@ -384,10 +384,22 @@ impl<'a> Codegen<'a> {
 					}));
 				}
 
-				add_action!(nodes, {
-					"action": action.id,
-					"values": values
-				});
+				if let Some(handlerbox) = args.handler {
+					match handlerbox.content {
+						Expression::Handler(_) => {},
+						_ => panic!("unexpected handler type in method call")
+					}
+					add_action!(nodes, {
+						"action": action.id,
+						"values": values,
+						"operations": self.generate_handler(varscope, &handlerbox, &mut nodes)
+					});
+				} else {
+					add_action!(nodes, {
+						"action": action.id,
+						"values": values
+					});
+				}
 			},
 
 			_ => {
@@ -430,8 +442,31 @@ impl<'a> Codegen<'a> {
 				}
 				return CValue::Array(values);
 			},
+			Expression::Handler(_) => {
+				error!(self, line, "cannot use handlers as values");
+			}
 
 			// _ => unimplemented!()
+		}
+	}
+
+	fn generate_handler(&mut self,
+		varscope: &mut HashMap<String, DefinedVariable>,
+		exprbox: &ExpressionBox,
+		nodes: &mut Vec<Value>
+	) -> Vec<Value> {
+		let line = exprbox.line;
+		let expr = exprbox.clone().content;
+
+		match expr {
+			Expression::Handler(body) => {
+				let mut handlernodes = vec![];
+				for statement in body.iter() {
+					self.generate_statement(statement, varscope, &mut handlernodes);
+				}
+				return handlernodes;
+			},
+			_ => panic!("unexpected handler expression type")
 		}
 	}
 

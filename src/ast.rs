@@ -6,7 +6,8 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub struct ArgumentList {
 	pub posargs: Vec<ExpressionBox>,
-	pub kwargs: HashMap<String, ExpressionBox>
+	pub kwargs: HashMap<String, ExpressionBox>,
+	pub handler: Option<Box<ExpressionBox>>
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,7 @@ pub enum Expression {
 		method: String,
 		args: ArgumentList
 	},
+	Handler(Vec<StatementBox>)
 }
 
 #[derive(Clone)]

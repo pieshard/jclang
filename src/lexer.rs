@@ -18,7 +18,7 @@ pub struct Token {
 
 static SYMBOLS: &[&str] = &[
 	";", "{", "}", "(", ")", "[", "]", "<", ">",
-	",", ".", "::", "//", "="
+	",", ".", "::", "//", "=>", "="
 ];
 
 pub fn tokenize(content: String) -> Vec<Token> {
