@@ -79,18 +79,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			.await?;
 
 		let body: Value = response.json().await?;
-		println!("Use this command to import (replace everything with) your compiled code:");
-		println!("	\x1b[97m/module loadUrl force https://m.justmc.ru/api/{}\x1b[0m",
+		eprintln!("Use this command to import (replace everything with) your compiled code:");
+		eprintln!("	\x1b[97m/module loadUrl force https://m.justmc.ru/api/{}\x1b[0m",
 			body.as_object().unwrap().get("id").unwrap().as_str().unwrap());
-		println!("This link will expire in 3 minutes!");
+		eprintln!("This link will expire in 3 minutes!");
 	}
 	if output {
 		println!("{}", serde_json::to_string_pretty(&json).unwrap());
 	}
 
 	let duration = start.elapsed();
-	println!("Took: {:?}", durationactions);
-	println!("Took: {:?}", duration);
+	eprintln!("Parsing actions JSON took: {:?}", durationactions);
+	eprintln!("Compilation took: {:?}", duration - durationactions);
 
 	Ok(())
 }
