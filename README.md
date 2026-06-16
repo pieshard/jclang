@@ -10,6 +10,8 @@ function testfunc() {
 event<player_join> {
   player::message(["hello", "world"]);
   testfunc();
+  local minimessage_test = m"<red>hi";
+  // также доступны: p (plain), j (json), l (legacy)(по умолчанию)
 }
 ```
 
