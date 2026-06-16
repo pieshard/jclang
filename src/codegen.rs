@@ -384,15 +384,11 @@ impl<'a> Codegen<'a> {
 					}));
 				}
 
-				if let Some(handlerbox) = args.handler {
-					match handlerbox.content {
-						Expression::Handler(_) => {},
-						_ => panic!("unexpected handler type in method call")
-					}
+				if let Some(handler) = args.handler {
 					add_action!(nodes, {
 						"action": action.id,
 						"values": values,
-						"operations": self.generate_handler(varscope, &handlerbox, &mut nodes)
+						"operations": self.generate_body(&handler, varscope)
 					});
 				} else {
 					add_action!(nodes, {
@@ -441,32 +437,9 @@ impl<'a> Codegen<'a> {
 					values.push(self.generate_value(varscope, &value, nodes));
 				}
 				return CValue::Array(values);
-			},
-			Expression::Handler(_) => {
-				error!(self, line, "cannot use handlers as values");
 			}
 
 			// _ => unimplemented!()
-		}
-	}
-
-	fn generate_handler(&mut self,
-		varscope: &mut HashMap<String, DefinedVariable>,
-		exprbox: &ExpressionBox,
-		nodes: &mut Vec<Value>
-	) -> Vec<Value> {
-		let line = exprbox.line;
-		let expr = exprbox.clone().content;
-
-		match expr {
-			Expression::Handler(body) => {
-				let mut handlernodes = vec![];
-				for statement in body.iter() {
-					self.generate_statement(statement, varscope, &mut handlernodes);
-				}
-				return handlernodes;
-			},
-			_ => panic!("unexpected handler expression type")
 		}
 	}
 

@@ -8,6 +8,7 @@ mod codegen;
 
 use std::env;
 use std::fs;
+use std::time::Instant;
 use serde_json::{Value};
 
 use crate::lexer::tokenize;
@@ -19,6 +20,8 @@ use crate::codegen::Codegen;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	#[cfg(windows)]
 	enable_ansi_support::enable_ansi_support().unwrap();
+
+	let start = Instant::now();
 
 	// parse arguments
 	let args: Vec<String> = env::args().collect();
@@ -43,6 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// read actions
 	let json = include_str!("../data/actions.json");
 	let actions: Vec<actions::Action> = actions::get_actions(json);
+
+	let durationactions = start.elapsed();
 
 	// read source
 	let content: String;
@@ -82,6 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	if output {
 		println!("{}", serde_json::to_string_pretty(&json).unwrap());
 	}
+
+	let duration = start.elapsed();
+	println!("Took: {:?}", durationactions);
+	println!("Took: {:?}", duration);
 
 	Ok(())
 }
