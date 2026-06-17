@@ -308,14 +308,45 @@ impl<'a> Parser<'a> {
 
 				let t = self.peekv();
 
+				// values
+				if t == "::" && name == "value".to_string() {
+					self.consume(); // ::
+					// TODO: check if the game value exists
+					let value = self.expect_identifier("when parsing value expression").value.clone();
+					let content = Expression::Value(value);
+					return ExpressionBox { content, line };
+				}
+
+				// null literal
+				else if name == "null".to_string() {
+					return ExpressionBox { content: Expression::NullLiteral, line };
+				}
+
 				// method calls
-				if t == "::" {
+				else if t == "::" {
 					self.consume(); // ::
 					let method = self.expect_identifier("when parsing method call").value.clone();
+
+					let selection;
+					if self.peekv() == "<" {
+						self.consume(); // <
+						let sname = self.expect_identifier("when parsing selection in method call").value.clone();
+						selection = Some(sname);
+						self.expect_value(">", "when parsing selection in method call");
+					} else { selection = None; }
+
+					let invert;
+					if self.peekv() == "!" {
+						self.consume();
+						invert = true;
+					} else { invert = false; }
+
 					let args = self.parse_mixed_argument_list();
 					let content = Expression::MethodCall {
 						object: name,
 						method: method,
+						invert: invert,
+						selection: selection,
 						args: args
 					};
 					return ExpressionBox { content, line };
@@ -385,6 +416,17 @@ impl<'a> Parser<'a> {
 			}
 			TokenType::FString => {
 				let name = self.consume().value.clone();
+
+				// function calls
+				if self.peekv() == "(" {
+					let args = self.parse_pos_argument_list();
+					let content = Expression::FunctionCall {
+						name: name,
+						args: args
+					};
+					return ExpressionBox { content, line };
+				}
+
 				let content = Expression::Identifier(name);
 				return ExpressionBox { content, line };
 			}

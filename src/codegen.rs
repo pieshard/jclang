@@ -39,6 +39,11 @@ fn find_action<'a>(actions: &'a Vec<Action>, object: &str, name: &str) -> Option
 		action.object == object && action.name == name
 	})
 }
+fn find_arg<'a>(action: &'a Action, id: &str) -> Option<&'a Argument> {
+	action.args.iter().find(|arg| {
+		arg.id == id
+	})
+}
 
 
 enum CValue {
@@ -51,7 +56,10 @@ enum CValue {
 		text: String
 	},
 	Number(f32),
-	Array(Vec<CValue>)
+	Array(Vec<CValue>),
+	Null,
+	Enum(String),
+	GameValue(String)
 }
 impl CValue {
 	fn finalize(&self) -> Value {
@@ -79,7 +87,16 @@ impl CValue {
 					"type": "array",
 					"values": values
 				});
-			}
+			},
+			CValue::Null => Value::Null,
+			CValue::Enum(name) => json!({
+				"type": "enum",
+				"enum": name
+			}),
+			CValue::GameValue(value) => json!({
+				"type": "game_value",
+				"game_value": value
+			})
 			// _ => unimplemented!(),
 		}
 	}
@@ -169,7 +186,7 @@ impl<'a> Codegen<'a> {
 				self.funcs.insert(name.to_string(), varscope.clone());
 				return action!({
 					"type": "function",
-					"position": self.pos,
+					"position": self.pos - 1,
 					"name": name,
 					"operations": operations
 				});
@@ -182,7 +199,7 @@ impl<'a> Codegen<'a> {
 				self.procs.push(name.to_string());
 				return action!({
 					"type": "process",
-					"position": self.pos,
+					"position": self.pos - 1,
 					"name": name,
 					"operations": operations
 				});
@@ -194,7 +211,7 @@ impl<'a> Codegen<'a> {
 				self.pos += 1;
 				return action!({
 					"type": "event",
-					"position": self.pos,
+					"position": self.pos - 1,
 					"event": event,
 					"operations": operations
 				});
@@ -354,7 +371,7 @@ impl<'a> Codegen<'a> {
 				}
 			},
 
-			Expression::MethodCall { object, method, args } => {
+			Expression::MethodCall { object, method, invert, selection, args } => {
 				let optaction = find_action(&self.actions, &object, &method);
 				let action;
 				match optaction {
@@ -369,31 +386,54 @@ impl<'a> Codegen<'a> {
 
 				let mut values = vec![];
 				for (i, expr) in args.posargs.iter().enumerate() {
-					let key = action.args[i].id.clone();
-					let value = self.generate_value(varscope, &expr, &mut nodes);
+					let arg = &action.args[i];
+					let key = arg.id.clone();
+					let value = self.generate_val_or_enum(varscope, &expr, &mut nodes, &arg, &key);
+
 					values.push(json!({
 						"name": key,
 						"value": value.finalize()
 					}));
 				}
 				for (key, expr) in args.kwargs {
-					let value = self.generate_value(varscope, &expr, &mut nodes);
+					let argopt = find_arg(&action, &key);
+					let arg;
+					match argopt {
+						Some(argsome) => arg = argsome,
+						None => error!(self, line, "key `{}` not found in action arguments", key),
+					}
+					let value = self.generate_val_or_enum(varscope, &expr, &mut nodes, &arg, &key);
+
 					values.push(json!({
 						"name": key.clone(),
 						"value": value.finalize()
 					}));
 				}
 
+				let select;
+				if let Some(selectionopt) = selection {
+					let selectionjson = json!({
+						"type": selectionopt
+					});
+					select = Some(serde_json::to_string(&selectionjson).expect("failed to serialize selection json"));
+				} else {
+					select = None;
+				}
+
 				if let Some(handler) = args.handler {
 					add_action!(nodes, {
 						"action": action.id,
 						"values": values,
+						"selection": select,
+						"is_inverted": invert,
 						"operations": self.generate_body(&handler, varscope)
 					});
 				} else {
 					add_action!(nodes, {
 						"action": action.id,
-						"values": values
+						"values": values,
+						"selection": select,
+						"is_inverted": invert
 					});
 				}
 			},
@@ -402,6 +442,33 @@ impl<'a> Codegen<'a> {
 				warn!(self, line, "expression statement does not yield an action");
 				self.generate_value(varscope, exprbox, &mut nodes);
 			}
+		}
+	}
+
+	fn generate_val_or_enum(&self, 
+		varscope: &mut HashMap<String, DefinedVariable>,
+		expr: &ExpressionBox,
+		mut nodes: &mut Vec<Value>,
+		arg: &Argument,
+		key: &str
+	) -> CValue {
+		let line = expr.line;
+		if arg.r#type == "enum" {
+			match &expr.content {
+				Expression::StringLiteral { text, parsing: _ } => {
+					let enumexpr = CValue::Enum(text.clone());
+
+					// check if the enum is present
+					// (values is always present when type is enum)
+					if !arg.values.as_ref().unwrap().contains(&text) {
+						error!(self, line, "enum `{}` is not valid in key `{}`", text, key);
+					}
+					return enumexpr;
+				},
+				_ => error!(self, line, "expected string literal in place of enum (in key `{}`)", key),
+			}
+		} else {
+			self.generate_value(varscope, &expr, &mut nodes)
 		}
 	}
 
@@ -414,8 +481,6 @@ impl<'a> Codegen<'a> {
 		let expr = exprbox.clone().content;
 
 		match expr {
-			Expression::NumberLiteral(value) => CValue::Number(value),
-			Expression::StringLiteral { parsing, text } => CValue::Text { parsing, text },
 			Expression::Identifier(name) => {
 				if let Some(var) = self.global.get(&name) {
 					return CValue::Variable { scope: var.scope.clone(), name: name };
@@ -424,20 +489,25 @@ impl<'a> Codegen<'a> {
 				}
 				error!(self, line, "undefined variable {}", name);
 			},
-			Expression::ExplicitVariable { scope, name } => CValue::Variable { scope, name },
-			Expression::FunctionCall { name: _, args: _ } => {
-				error!(self, line, "cannot use function calls as values");
-			},
-			Expression::MethodCall { object: _, method: _, args: _ } => {
-				error!(self, line, "cannot use action calls as values");
-			},
+			Expression::NumberLiteral(value) => CValue::Number(value),
+			Expression::StringLiteral { parsing, text } => CValue::Text { parsing, text },
 			Expression::ArrayLiteral(array) => {
 				let mut values = vec![];
 				for value in array {
 					values.push(self.generate_value(varscope, &value, nodes));
 				}
 				return CValue::Array(values);
-			}
+			},
+			Expression::NullLiteral => CValue::Null,
+
+			Expression::ExplicitVariable { scope, name } => CValue::Variable { scope, name },
+			Expression::FunctionCall { .. } => {
+				error!(self, line, "cannot use function calls as values");
+			},
+			Expression::MethodCall { .. } => {
+				error!(self, line, "cannot use action calls as values");
+			},
+			Expression::Value(value) => CValue::GameValue(value)
 
 			// _ => unimplemented!()
 		}

@@ -23,6 +23,7 @@ pub enum Expression {
 		text: String
 	},
 	ArrayLiteral(Vec<ExpressionBox>),
+	NullLiteral,
 	FunctionCall {
 		name: String,
 		args: Vec<ExpressionBox>
@@ -30,8 +31,11 @@ pub enum Expression {
 	MethodCall {
 		object: String,
 		method: String,
+		invert: bool,
+		selection: Option<String>,
 		args: ArgumentList
-	}
+	},
+	Value(String)
 }
 
 #[derive(Clone)]

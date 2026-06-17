@@ -14,7 +14,8 @@ pub struct Action {
 #[derive(Debug, Deserialize)]
 pub struct Argument {
 	pub id: String,
-	pub r#type: String
+	pub r#type: String,
+	pub values: Option<Vec<String>>
 }
 
 pub fn get_actions(json: &str) -> Vec<Action> {
