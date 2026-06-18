@@ -68,6 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let mut codegen = Codegen::new(actions, ast, &content, &chunk);
 	let json = codegen.generate();
 	
+	let duration = start.elapsed();
+	
 	// do something
 	if upload {
 		println!("Uploading to JustMC...");
@@ -88,7 +90,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		println!("{}", serde_json::to_string_pretty(&json).unwrap());
 	}
 
-	let duration = start.elapsed();
 	eprintln!("Parsing actions JSON took: {:?}", durationactions);
 	eprintln!("Compilation took: {:?}", duration - durationactions);
 

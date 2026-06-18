@@ -45,6 +45,27 @@ fn find_arg<'a>(action: &'a Action, id: &str) -> Option<&'a Argument> {
 	})
 }
 
+fn expect_number(arg: Option<&ExpressionBox>) -> Option<f32> {
+	if let Some(arg) = arg {
+		match arg.content {
+			Expression::NumberLiteral(value) => Some(value),
+			_ => None
+		}
+	} else {
+		return None;
+	}
+}
+fn expect_text(arg: Option<&ExpressionBox>) -> Option<String> {
+	if let Some(arg) = arg {
+		match &arg.content {
+			Expression::StringLiteral { parsing: _, text } => Some(text.to_string()),
+			_ => None
+		}
+	} else {
+		return None;
+	}
+}
+
 
 enum CValue {
 	Variable {
@@ -59,7 +80,27 @@ enum CValue {
 	Array(Vec<CValue>),
 	Null,
 	Enum(String),
-	GameValue(String)
+	GameValue(String),
+	// fabrics
+	Location(f32, f32, f32, f32, f32),
+	Vector(f32, f32, f32),
+	Sound {
+		sound: String,
+		pitch: f32,
+		volume: f32,
+		source: String
+	},
+	Particle {
+		particle: String,
+		count: f32,
+		xspread: f32,
+		yspread: f32
+	},
+	Potion {
+		potion: String,
+		amplifier: f32,
+		duration: f32
+	}
 }
 impl CValue {
 	fn finalize(&self) -> Value {
@@ -96,7 +137,38 @@ impl CValue {
 			CValue::GameValue(value) => json!({
 				"type": "game_value",
 				"game_value": value
+			}),
+
+			// fabrics
+			CValue::Location(x, y, z, yaw, pitch) => json!({
+				"type": "location",
+				"x": x, "y": y, "z": z, "yaw": yaw, "pitch": pitch
+			}),
+			CValue::Vector(x, y, z) => json!({
+				"type": "vector",
+				"x": x, "y": y, "z": z
+			}),
+			CValue::Sound { sound, pitch, volume, source } => json!({
+				"type": "sound",
+				"sound": sound,
+				"pitch": pitch,
+				"volume": volume,
+				"source": source
+			}),
+			CValue::Particle { particle, count, xspread, yspread } => json!({
+				"type": "particle",
+				"particle_type": particle,
+				"count": count,
+				"xspread": xspread,
+				"yspread": yspread
+			}),
+			CValue::Potion { potion, amplifier, duration } => json!({
+				"type": "potion",
+				"potion": potion,
+				"amplifier": amplifier,
+				"duration": duration
 			})
+
 			// _ => unimplemented!(),
 		}
 	}
@@ -501,9 +573,15 @@ impl<'a> Codegen<'a> {
 			Expression::NullLiteral => CValue::Null,
 
 			Expression::ExplicitVariable { scope, name } => CValue::Variable { scope, name },
-			Expression::FunctionCall { .. } => {
-				error!(self, line, "cannot use function calls as values");
+
+			Expression::FunctionCall { name, args } => {
+				if name == "location".to_string() { self.generate_location(args, line) }
+				else if name == "vector".to_string() { self.generate_vector(args, line) }
+				else {
+					error!(self, line, "cannot use function calls as values");
+				}
 			},
+
 			Expression::MethodCall { .. } => {
 				error!(self, line, "cannot use action calls as values");
 			},
@@ -511,6 +589,60 @@ impl<'a> Codegen<'a> {
 
 			// _ => unimplemented!()
 		}
+	}
+
+
+	// fabric generators
+	fn required_number(&self, arg: Option<&ExpressionBox>, line: u32, help: &str) -> f32 {
+		if let Some(value) = expect_number(arg) { value }
+		else { error!(self, line, "{}", help) }
+	}
+	fn optional_number(&self, arg: Option<&ExpressionBox>, default: f32) -> f32 {
+		if let Some(value) = expect_number(arg) { value }
+		else { default }
+	}
+	fn required_text(&self, arg: Option<&ExpressionBox>, line: u32, help: &str) -> String {
+		if let Some(value) = expect_text(arg) { value }
+		else { error!(self, line, "{}", help) }
+	}
+	fn optional_text(&self, arg: Option<&ExpressionBox>, default: String) -> String {
+		if let Some(value) = expect_text(arg) { value }
+		else { default }
+	}
+
+	fn generate_location(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
+		let x = self.required_number(args.get(0), line, "expected x (number) at argument №1");
+		let y = self.required_number(args.get(1), line, "expected y (number) at argument №2");
+		let z = self.required_number(args.get(2), line, "expected z (number) at argument №3");
+		let yaw = self.optional_number(args.get(3), 0.0);
+		let pitch = self.optional_number(args.get(4), 0.0);
+		return CValue::Location(x, y, z, yaw, pitch);
+	}
+	fn generate_vector(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
+		let x = self.required_number(args.get(0), line, "expected x (number) at argument №1");
+		let y = self.required_number(args.get(1), line, "expected y (number) at argument №2");
+		let z = self.required_number(args.get(2), line, "expected z (number) at argument №3");
+		return CValue::Vector(x, y, z);
+	}
+	fn generate_sound(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
+		let sound = self.required_text(args.get(0), line, "expected sound (text) at argument №1");
+		let pitch = self.optional_number(args.get(1), 1.0);
+		let volume = self.optional_number(args.get(2), 1.0);
+		let source = self.optional_text(args.get(3), "MASTER".to_string());
+		return CValue::Sound { sound, pitch, volume, source };
+	}
+	fn generate_particle(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
+		let particle = self.required_text(args.get(0), line, "expected particle (text) at argument №1");
+		let count = self.optional_number(args.get(1), 1.0);
+		let xspread = self.optional_number(args.get(2), 0.0);
+		let yspread = self.optional_number(args.get(3), 0.0);
+		return CValue::Particle { particle, count, xspread, yspread };
+	}
+	fn generate_potion(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
+		let potion = self.required_text(args.get(0), line, "expected potion (text) at argument №1");
+		let amplifier = self.optional_number(args.get(1), 0.0);
+		let duration = self.optional_number(args.get(2), -1.0);
+		return CValue::Potion { potion, amplifier, duration };
 	}
 
 
