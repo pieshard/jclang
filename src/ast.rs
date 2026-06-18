@@ -1,5 +1,3 @@
-#[allow(unused)] // keep it until this is usable
-
 use std::collections::HashMap;
 use std::fmt;
 
@@ -23,6 +21,7 @@ pub enum Expression {
 		text: String
 	},
 	ArrayLiteral(Vec<ExpressionBox>),
+	MapLiteral(Vec<ExpressionBox>, Vec<ExpressionBox>),
 	NullLiteral,
 	FunctionCall {
 		name: String,
@@ -35,7 +34,10 @@ pub enum Expression {
 		selection: Option<String>,
 		args: ArgumentList
 	},
-	Value(String)
+	Value {
+		id: String,
+		selection: Option<String>
+	}
 }
 
 #[derive(Clone)]

@@ -1,5 +1,3 @@
-#[allow(unused)] // keep it until this is usable
-
 use crate::actions::*;
 use crate::ast::*;
 
@@ -45,27 +43,6 @@ fn find_arg<'a>(action: &'a Action, id: &str) -> Option<&'a Argument> {
 	})
 }
 
-fn expect_number(arg: Option<&ExpressionBox>) -> Option<f32> {
-	if let Some(arg) = arg {
-		match arg.content {
-			Expression::NumberLiteral(value) => Some(value),
-			_ => None
-		}
-	} else {
-		return None;
-	}
-}
-fn expect_text(arg: Option<&ExpressionBox>) -> Option<String> {
-	if let Some(arg) = arg {
-		match &arg.content {
-			Expression::StringLiteral { parsing: _, text } => Some(text.to_string()),
-			_ => None
-		}
-	} else {
-		return None;
-	}
-}
-
 
 enum CValue {
 	Variable {
@@ -78,9 +55,13 @@ enum CValue {
 	},
 	Number(f32),
 	Array(Vec<CValue>),
+	Map(Vec<CValue>, Vec<CValue>),
 	Null,
 	Enum(String),
-	GameValue(String),
+	GameValue {
+		id: String,
+		selection: Option<String>
+	},
 	// fabrics
 	Location(f32, f32, f32, f32, f32),
 	Vector(f32, f32, f32),
@@ -129,15 +110,54 @@ impl CValue {
 					"values": values
 				});
 			},
+			CValue::Map(keysarr, valuesarr) => {
+				let mut keys = vec![];
+				for element in keysarr {
+					keys.push(element.finalize());
+				}
+				let mut values = vec![];
+				for element in valuesarr {
+					values.push(element.finalize());
+				}
+
+				let mut map = HashMap::new();
+				for i in 0..keys.len() {
+					let key = &keys[i];
+					let value = &values[i];
+					map.insert(
+						serde_json::to_string(&key).expect("failed to serialize key json"),
+						value
+					);
+				}
+				return json!({
+					"type": "map",
+					"values": map
+				});
+			},
 			CValue::Null => Value::Null,
 			CValue::Enum(name) => json!({
 				"type": "enum",
 				"enum": name
 			}),
-			CValue::GameValue(value) => json!({
-				"type": "game_value",
-				"game_value": value
-			}),
+			CValue::GameValue { id, selection } => {
+				if let Some(selectionopt) = selection {
+					let selectionjson = json!({
+						"type": selectionopt
+					});
+					let select = serde_json::to_string(&selectionjson).expect("failed to serialize selection json");
+				
+					return json!({
+						"type": "game_value",
+						"game_value": id,
+						"selection": select
+					});
+				} else {
+					return json!({
+						"type": "game_value",
+						"game_value": id
+					});
+				}
+			},
 
 			// fabrics
 			CValue::Location(x, y, z, yaw, pitch) => json!({
@@ -180,12 +200,19 @@ struct DefinedVariable {
 	line: u32
 }
 
+#[derive(Clone)]
+struct DefinedFunction {
+	varscope: HashMap<String, DefinedVariable>,
+	args: Vec<String>,
+	func: bool,
+	// line: u32
+}
+
 pub struct Codegen<'a> {
 	actions: Vec<Action>,
 	statements: Vec<StatementBox>,
 	global: HashMap<String, DefinedVariable>, // varscope
-	funcs: HashMap<String, HashMap<String, DefinedVariable>>, // functions and their varscopes
-	procs: Vec<String>,
+	funcs: HashMap<String, DefinedFunction>,
 	source: &'a String,
 	file: &'a String,
 	pos: u32
@@ -198,7 +225,6 @@ impl<'a> Codegen<'a> {
 			statements: stmts,
 			global: HashMap::new(),
 			funcs: HashMap::new(),
-			procs: vec![],
 			source: source,
 			file: file,
 			pos: 0
@@ -251,29 +277,57 @@ impl<'a> Codegen<'a> {
 	// generators
 	fn generate_top_statement(&mut self, stmtbox: &StatementBox) -> Option<Value> {
 		match &stmtbox.content {
-			Statement::FunctionDefinition {name, params: _, body} => {
+			Statement::FunctionDefinition {name, params, body} => {
 				let mut varscope: HashMap<String, DefinedVariable> = HashMap::new();
+
+				let parameters = self.generate_params(params);
+				for param in params { // import params to scope
+					varscope.insert(param.to_string(), DefinedVariable { scope: "line".to_string(), line: stmtbox.line });
+				}
+
 				let operations = self.generate_body(body, &mut varscope);
 				self.pos += 1;
-				self.funcs.insert(name.to_string(), varscope.clone());
+				self.funcs.insert(name.to_string(), DefinedFunction {
+					varscope: varscope.clone(),
+					args: params.clone(),
+					func: true,
+					// line: stmtbox.line
+				});
 				return action!({
 					"type": "function",
 					"position": self.pos - 1,
 					"name": name,
-					"operations": operations
+					"operations": operations,
+					"values": [
+						{ "name": "parameters", "value": parameters }
+					]
 				});
 			},
 
-			Statement::ProcessDefinition {name, params: _, body} => {
+			Statement::ProcessDefinition {name, params, body} => {
 				let mut varscope: HashMap<String, DefinedVariable> = HashMap::new();
+
+				let parameters = self.generate_params(params);
+				for param in params { // import params to scope
+					varscope.insert(param.to_string(), DefinedVariable { scope: "line".to_string(), line: stmtbox.line });
+				}
+
 				let operations = self.generate_body(body, &mut varscope);
 				self.pos += 1;
-				self.procs.push(name.to_string());
+				self.funcs.insert(name.to_string(), DefinedFunction {
+					varscope: HashMap::new(),
+					args: params.clone(),
+					func: false,
+					// line: stmtbox.line
+				});
 				return action!({
 					"type": "process",
 					"position": self.pos - 1,
 					"name": name,
-					"operations": operations
+					"operations": operations,
+					"values": [
+						{ "name": "parameters", "value": parameters }
+					]
 				});
 			},
 
@@ -314,6 +368,28 @@ impl<'a> Codegen<'a> {
 				error!(self, stmtbox.line, "expression statements cannot be used outside of a handler (headless action)");
 			}
 		}
+	}
+
+	fn generate_params(&self, params: &Vec<String>) -> Value {
+		let mut parameters = vec![];
+		for i in 0..params.len() {
+			let obj = json!({
+				"type": "parameter",
+				"type_key": "singular",
+				"description": "{translations:{}}",
+				"name": &params[i],
+				"value_type": "any",
+				"is_required": false,
+				"default_value": "{}",
+				"slot": i,
+				"description_slot": 9+i
+			});
+			parameters.push(obj);
+		}
+		return json!({
+			"type": "array",
+			"values": parameters
+		});
 	}
 
 	fn generate_statement(&mut self,
@@ -407,8 +483,9 @@ impl<'a> Codegen<'a> {
 		let expr = exprbox.clone().unwrap();
 
 		match expr {
-			Expression::FunctionCall {name, args: _} => {
-				if let Some(fvarscope) = self.funcs.get(&name) {
+			Expression::FunctionCall { name, args } => {
+				if let Some(func) = self.funcs.get(&name) {
+					let fvarscope = &func.varscope;
 					for (key, value) in fvarscope.into_iter() {
 						if let Some(redefined) = varscope.get(key) {
 							warn!(self, line, "variable `{}` (defined at line {}) is possibly changed from calling {}",
@@ -419,22 +496,18 @@ impl<'a> Codegen<'a> {
 						}
 					}
 
+					let actionid = { if func.func { "call_function" } else { "start_process" } };
+					let nameparam = { if func.func { "function_name" } else { "process_name" } };
 					add_action!(nodes, {
-						"action": "call_function",
+						"action": actionid,
 						"values": [
 							{
-								"name": "function_name",
+								"name": nameparam,
 								"value": {"type": "text", "text": name, "parsing": "plain"}
-							}
-						]
-					});
-				} else if self.procs.contains(&name) {
-					add_action!(nodes, {
-						"action": "start_process",
-						"values": [
+							},
 							{
-								"name": "process_name",
-								"value": {"type": "text", "text": name, "parsing": "plain"}
+								"name": "args",
+								"value": self.generate_callparams(line, func, args, varscope, &mut nodes)
 							}
 						]
 					});
@@ -517,6 +590,29 @@ impl<'a> Codegen<'a> {
 		}
 	}
 
+	fn generate_callparams(&self,
+		line: u32,
+		func: &DefinedFunction,
+		args: Vec<ExpressionBox>,
+		varscope: &mut HashMap<String, DefinedVariable>,
+		mut nodes: &mut Vec<Value>
+	) -> Value {
+		let funcargs = &func.args;
+		if args.len() != funcargs.len() {
+			error!(self, line, "argument count mismatch when calling a function (expected {} but got {})", funcargs.len(), args.len());
+		}
+
+		let mut paramkeys = vec![];
+		for arg in funcargs {
+			paramkeys.push(CValue::Text { parsing: "plain".to_string(), text: arg.to_string() });
+		}
+		let mut paramvalues = vec![];
+		for arg in args {
+			paramvalues.push(self.generate_value(varscope, &arg, &mut nodes));
+		}
+		return CValue::Map(paramkeys, paramvalues).finalize();
+	}
+
 	fn generate_val_or_enum(&self, 
 		varscope: &mut HashMap<String, DefinedVariable>,
 		expr: &ExpressionBox,
@@ -570,6 +666,17 @@ impl<'a> Codegen<'a> {
 				}
 				return CValue::Array(values);
 			},
+			Expression::MapLiteral(keysarr, valuesarr) => {
+				let mut keys = vec![];
+				for key in keysarr {
+					keys.push(self.generate_value(varscope, &key, nodes));
+				}
+				let mut values = vec![];
+				for value in valuesarr {
+					values.push(self.generate_value(varscope, &value, nodes));
+				}
+				return CValue::Map(keys, values);
+			},
 			Expression::NullLiteral => CValue::Null,
 
 			Expression::ExplicitVariable { scope, name } => CValue::Variable { scope, name },
@@ -577,6 +684,9 @@ impl<'a> Codegen<'a> {
 			Expression::FunctionCall { name, args } => {
 				if name == "location".to_string() { self.generate_location(args, line) }
 				else if name == "vector".to_string() { self.generate_vector(args, line) }
+				else if name == "sound".to_string() { self.generate_sound(args, line) }
+				else if name == "particle".to_string() { self.generate_particle(args, line) }
+				else if name == "potion".to_string() { self.generate_potion(args, line) }
 				else {
 					error!(self, line, "cannot use function calls as values");
 				}
@@ -585,7 +695,7 @@ impl<'a> Codegen<'a> {
 			Expression::MethodCall { .. } => {
 				error!(self, line, "cannot use action calls as values");
 			},
-			Expression::Value(value) => CValue::GameValue(value)
+			Expression::Value { id, selection } => CValue::GameValue { id, selection }
 
 			// _ => unimplemented!()
 		}
@@ -594,28 +704,52 @@ impl<'a> Codegen<'a> {
 
 	// fabric generators
 	fn required_number(&self, arg: Option<&ExpressionBox>, line: u32, help: &str) -> f32 {
-		if let Some(value) = expect_number(arg) { value }
-		else { error!(self, line, "{}", help) }
+		if let Some(arg) = arg {
+			match arg.content {
+				Expression::NumberLiteral(value) => value,
+				_ => error!(self, line, "{}", help)
+			}
+		} else {
+			error!(self, line, "{}", help);
+		}
 	}
-	fn optional_number(&self, arg: Option<&ExpressionBox>, default: f32) -> f32 {
-		if let Some(value) = expect_number(arg) { value }
-		else { default }
+	fn optional_number(&self, arg: Option<&ExpressionBox>, default: f32, line: u32, help: &str) -> f32 {
+		if let Some(arg) = arg {
+			match arg.content {
+				Expression::NumberLiteral(value) => value,
+				_ => error!(self, line, "{}", help)
+			}
+		} else {
+			return default;
+		}
 	}
 	fn required_text(&self, arg: Option<&ExpressionBox>, line: u32, help: &str) -> String {
-		if let Some(value) = expect_text(arg) { value }
-		else { error!(self, line, "{}", help) }
+		if let Some(arg) = arg {
+			match &arg.content {
+				Expression::StringLiteral { parsing: _, text } => text.to_string(),
+				_ => error!(self, line, "{}", help)
+			}
+		} else {
+			error!(self, line, "{}", help);
+		}
 	}
-	fn optional_text(&self, arg: Option<&ExpressionBox>, default: String) -> String {
-		if let Some(value) = expect_text(arg) { value }
-		else { default }
+	fn optional_text(&self, arg: Option<&ExpressionBox>, default: String, line: u32, help: &str) -> String {
+		if let Some(arg) = arg {
+			match &arg.content {
+				Expression::StringLiteral { parsing: _, text } => text.to_string(),
+				_ => error!(self, line, "{}", help)
+			}
+		} else {
+			return default;
+		}
 	}
 
 	fn generate_location(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
 		let x = self.required_number(args.get(0), line, "expected x (number) at argument №1");
 		let y = self.required_number(args.get(1), line, "expected y (number) at argument №2");
 		let z = self.required_number(args.get(2), line, "expected z (number) at argument №3");
-		let yaw = self.optional_number(args.get(3), 0.0);
-		let pitch = self.optional_number(args.get(4), 0.0);
+		let yaw = self.optional_number(args.get(3), 0.0, line, "expected yaw (number) at argument №4");
+		let pitch = self.optional_number(args.get(4), 0.0, line, "expected pitch (number) at argument №5");
 		return CValue::Location(x, y, z, yaw, pitch);
 	}
 	fn generate_vector(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
@@ -626,22 +760,22 @@ impl<'a> Codegen<'a> {
 	}
 	fn generate_sound(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
 		let sound = self.required_text(args.get(0), line, "expected sound (text) at argument №1");
-		let pitch = self.optional_number(args.get(1), 1.0);
-		let volume = self.optional_number(args.get(2), 1.0);
-		let source = self.optional_text(args.get(3), "MASTER".to_string());
+		let pitch = self.optional_number(args.get(1), 1.0, line, "expected pitch (number) at argument №2");
+		let volume = self.optional_number(args.get(2), 1.0, line, "expected volume (number) at argument №3");
+		let source = self.optional_text(args.get(3), "MASTER".to_string(), line, "expected source (text) at argument №4");
 		return CValue::Sound { sound, pitch, volume, source };
 	}
 	fn generate_particle(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
 		let particle = self.required_text(args.get(0), line, "expected particle (text) at argument №1");
-		let count = self.optional_number(args.get(1), 1.0);
-		let xspread = self.optional_number(args.get(2), 0.0);
-		let yspread = self.optional_number(args.get(3), 0.0);
+		let count = self.optional_number(args.get(1), 1.0, line, "expected count (number) at argument №2");
+		let xspread = self.optional_number(args.get(2), 0.0, line, "expected xspread (number) at argument №3");
+		let yspread = self.optional_number(args.get(3), 0.0, line, "expected yspread (number) at argument №4");
 		return CValue::Particle { particle, count, xspread, yspread };
 	}
 	fn generate_potion(&self, args: Vec<ExpressionBox>, line: u32) -> CValue {
 		let potion = self.required_text(args.get(0), line, "expected potion (text) at argument №1");
-		let amplifier = self.optional_number(args.get(1), 0.0);
-		let duration = self.optional_number(args.get(2), -1.0);
+		let amplifier = self.optional_number(args.get(1), 0.0, line, "expected amplifier (number) at argument №2");
+		let duration = self.optional_number(args.get(2), -1.0, line, "expected duration (number) at argument №3");
 		return CValue::Potion { potion, amplifier, duration };
 	}
 

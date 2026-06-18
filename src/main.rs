@@ -1,5 +1,3 @@
-#[allow(unused)] // keep it until this is usable
-
 mod actions;
 mod ast;
 mod lexer;

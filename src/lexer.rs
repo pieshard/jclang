@@ -1,5 +1,3 @@
-#[allow(unused)] // keep it until this is usable
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
 	Identifier,

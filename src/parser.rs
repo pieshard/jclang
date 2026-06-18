@@ -1,5 +1,3 @@
-#[allow(unused)] // keep it until this is usable
-
 use crate::ast::*;
 use crate::lexer::Token;
 use crate::lexer::TokenType;
@@ -259,6 +257,7 @@ impl<'a> Parser<'a> {
 				self.expect_value(")", PARSING_PARAM);
 				break;
 			}
+			self.expect_value(",", PARSING_PARAM);
 		}
 
 		let body = self.parse_body();
@@ -313,7 +312,15 @@ impl<'a> Parser<'a> {
 					self.consume(); // ::
 					// TODO: check if the game value exists
 					let value = self.expect_identifier("when parsing value expression").value.clone();
-					let content = Expression::Value(value);
+					let selection;
+					if self.peekv() == "<" {
+						self.consume(); // <
+						let sname = self.expect_identifier("when parsing selection in value expression").value.clone();
+						selection = Some(sname);
+						self.expect_value(">", "when parsing selection in value expression");
+					} else { selection = None; }
+
+					let content = Expression::Value { id: value, selection: selection };
 					return ExpressionBox { content, line };
 				}
 
@@ -449,6 +456,30 @@ impl<'a> Parser<'a> {
 					}
 					self.expect_value("]", PARSING_ARR);
 					let content = Expression::ArrayLiteral(content);
+					return ExpressionBox { content, line };
+				}
+
+				// map literals
+				else if self.peekv() == "{" {
+					static PARSING_MAP: &str = "when parsing a map literal";
+
+					self.expect_value("{", PARSING_MAP);
+					let mut keys = vec![];
+					let mut values = vec![];
+					while self.peekv() != "}" {
+						let key = self.parse_expr();
+						keys.push(key);
+						self.expect_value(":", PARSING_MAP);
+						let value = self.parse_expr();
+						values.push(value);
+						if self.peekv() == "," {
+							self.consume();
+						} else {
+							break;
+						}
+					}
+					self.expect_value("}", PARSING_MAP);
+					let content = Expression::MapLiteral(keys, values);
 					return ExpressionBox { content, line };
 				}
 
